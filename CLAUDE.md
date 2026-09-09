@@ -24,7 +24,7 @@ Bare `create-next-app` scaffold. Nothing product-specific exists.
 - [x] Domain live on Vercel, deploys on push to `main`
 - [x] Drizzle + Neon installed
 - [x] API connection verified — see `sample.json`
-- [ ] Schema
+- [x] Schema
 - [ ] Ingestion
 - [ ] Artist page
 - [ ] Landing page
@@ -240,6 +240,64 @@ likely place for any of them to appear.
 - **`with` (guest artist)** — 0 occurrences in 337 songs, so its shape is still
   undocumented. Assume an artist object like `cover` until a real one is seen, and
   re-check against a payload before building the guest-appearances feature.
+
+## Schema
+
+`db/schema.ts` holds the tables. Two things Drizzle cannot express live in SQL and are
+load-bearing — **read them before changing the schema**:
+
+- `drizzle/0000_song_key_function.sql` — `taperdeck_song_key()`, which `songs.match_key`
+  is generated from.
+- `drizzle/0002_sequencing.sql` — the `shows.show_seq` triggers, the deferrable
+  uniqueness constraint, and the three views.
+
+Commands: `npm run db:generate`, `npm run db:migrate`, `npm run db:load-sample`.
+`drizzle.config.ts` uses `DATABASE_URL_UNPOOLED`; `db/index.ts` uses the pooled
+`DATABASE_URL`.
+
+### Four rules that keep gap correct
+
+**Never write `show_seq` from application code.** It is the per-artist show ordinal that
+turns gap from a count over rows into integer subtraction, and a trigger owns it. It is a
+full `row_number()` recompute, not an increment, because ingestion fetches recent pages
+first and backfills *older* shows later — an appended counter would be wrong the first
+time backfill ran.
+
+**Read statistics from `performances_counted`, never from `performances`.** The
+`NOT is_tape` filter is baked into the view so forgetting it is unreachable rather than
+merely discouraged. `tape` songs went out over the PA and were not performed.
+
+**There is exactly one song normaliser, and it lives in Postgres.** Do not reimplement
+`taperdeck_song_key` in TypeScript, even for a quick dedupe — two implementations drift,
+and the failure is a wrong gap number with nothing visibly broken. `scripts/load-sample.mts`
+resolves names to song ids by asking the database.
+
+**A cover is the same song identity as an original.** One row per `(artist, match_key)`
+with the original performer as an attribute. Gap means "shows since *this artist* last
+played this". 20 of the 71 covers in `sample.json` are Phish side projects (Trey
+Anastasio, TAB, Ghosts of The Forest, Vida Blue); separate identities would exile a chunk
+of the band's own repertoire from its own rotation stats.
+
+### Gap is relative to the shows we hold
+
+`current_gap` counts shows **in our database**, not shows that happened. While an
+artist's history is only partially ingested, every gap is understated — and it will look
+entirely plausible while being wrong. **Do not present a gap as absolute until backfill
+for that artist is complete.** Either finish backfill before showing the number, or say
+what it is counted against.
+
+### Verification
+
+`npm run db:load-sample` loads the committed `sample.json` and asserts 21 properties
+against it — that `05-09-2026` stores as 5 September, that a backfilled older show
+renumbers everything beneath it, that an empty setlist consumes no ordinal, that the one
+`tape` row is excluded from `song_gap`, and that re-running changes nothing. It is a test
+fixture, not the ingestion pipeline: no network, no pagination, no run log.
+
+Note the deliberate off-by-one in those assertions: 192 songs are stored but 191 reach
+`song_gap`, and 105 songs were played once but gap sees 104. Both gaps are the same
+tape-only row being correctly excluded. If those numbers ever match, the tape filter has
+stopped working.
 
 ## Architecture: lazy ingestion, then cache
 
