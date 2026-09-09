@@ -256,6 +256,22 @@ defensive handling was warranted.
   100 observed cases, and `mbid` was present in all 100. Goose had 67 guest performances
   in 100 shows, Dua Lipa 33.
 
+**There is no instrument field on `with`, and there never was.** Those five keys are the
+whole object. Any copy of the form "Marla Quinn on fiddle" or "tenor sax · first time
+with Goose" cannot be built from this API — the v2 designs assumed it, and the assumption
+survived all the way to implementation before anyone checked. **Do not design it back in.**
+What *is* real and available: the guest's name, and how many of this artist's shows they
+have appeared at.
+
+**Segue markers are not a field either**, but they are recoverable — messily. The song
+object has only `name`, `info`, `cover`, `tape`; segues live inside `info` as trailing
+tokens (`"Trey on percussion kit) (>"`, `"…Wu-Tang Forever!; >"`). 1,638 of 2,472
+non-null `info` values contain a `>`. That is a heuristic, not a contract, so nothing
+parses it today and the setlist row leaves the slot empty.
+
+Also absent: **set durations**. `info` carries no timings, so "3 songs · 19 min" is not
+buildable — song counts are.
+
 Still unknown: whether a song can carry **more than one** guest. Every observed `with` is
 a single object, so the column stays `jsonb` rather than a foreign key until that is
 settled.
@@ -381,6 +397,32 @@ setlist.fm returns **404 for an empty result**, not an empty list — confirmed.
 `/search/artists` that means `ARTIST_NOT_FOUND`; on a setlists page it means
 `NO_SETLISTS` if it is the first page requested, or simply the end of the history if it
 is not.
+
+## Design system
+
+Token values in `app/globals.css` (`@theme`). **Rules in `docs/design-system.md` — read
+it before writing any UI.** The rules matter more than the hex codes.
+
+The five that get broken most easily:
+
+**Gap is the only thing that gets the accent colour.** `#B79CED` is the workhorse,
+`#AC7DFF` is capped at **one element per screen** on a top-decile gap and only ever on a
+display-scale numeral. If either lavender lands on a button, link, brand mark or nav
+item, that is a bug.
+
+**Colour is never load-bearing alone.** Every semantic state ships a word or a glyph too.
+Removing all hue must leave the page readable. Selection is a 3px left edge — position,
+not colour.
+
+**Five AA exemptions exist, two of them outright bans** (`text-quaternary` and `gap-loud`
+on `surface-300`). The list is closed. If something needs a sixth, add it to the list
+with its reasoning rather than letting it drift.
+
+**The bar is never the value.** Gap bars scale to the artist's own longest gap with a
+floor of 24, so the integer is printed beside every bar and each list states its scale.
+
+**Numbers never round.** 219 not 220. Gap 0 renders "last night", never `0`. Unknown
+renders an em dash, never `0` — 0 is a real gap value.
 
 ## Architecture: lazy ingestion, then cache
 

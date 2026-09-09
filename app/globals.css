@@ -1,26 +1,322 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* ---------------------------------------------------------------------------
+   Taperdeck design system v2.0
+   Normative token values. The RULES that govern their use live in
+   docs/design-system.md and are not optional — read that before using anything
+   here, particularly the accent discipline and the five AA exemptions.
+   --------------------------------------------------------------------------- */
+
+@theme {
+  /* -- Surfaces. Depth by value, never by shadow. -------------------------- */
+  /* Steps 1.09, 1.17, 1.18:1; page to overlay 1.50:1. */
+  --color-surface-000: #0a0a0a; /* page — the only full-bleed background */
+  --color-surface-100: #161616; /* raised: cards, stat blocks, callouts */
+  --color-surface-200: #242424; /* interactive fill: input rest, row hover */
+  --color-surface-300: #303030; /* overlay: typeahead, sheets, menus */
+
+  --color-divider: #191919; /* 1px song-row rules. Decorative only. */
+  --color-border: #1f1f1f; /* container edges. Structural, exempt from 3:1. */
+  --color-border-control: #808080; /* MANDATORY on anything typeable/pressable */
+
+  --color-scrim: rgb(0 0 0 / 0.72);
+
+  /* -- Text. Ratios on surfaces 000 / 100 / 200 / 300. --------------------- */
+  --color-text-primary: #fafafa; /* 18.97 · 17.34 · 14.87 · 12.64 */
+  --color-text-secondary: #c4c4c4; /* 11.35 · 10.38 ·  8.90 ·  7.57 */
+  --color-text-tertiary: #a0a0a0; /*  7.57 ·  6.92 ·  5.94 ·  5.05 */
+  --color-text-quaternary: #8a8a8a; /*  5.73 ·  5.24 ·  4.50 ·  3.82 ✕ banned on 300 */
+
+  /* -- Accent: GAP ONLY, two strengths, and the list is closed. ------------ */
+  /* If either lavender lands on a button, link, brand mark or nav item, that
+     is a bug. See docs/design-system.md. */
+  --color-gap: #b79ced; /* workhorse — 8.48:1 on page */
+  --color-gap-hover: #d2bef7; /* 11.74:1 on page */
+  --color-gap-loud: #ac7dff; /* 6.72:1 — ONE per screen, top decile only */
+  --color-gap-track: #2b2b2b; /* fill-to-track 6.06:1 */
+
+  /* Row-weight rails (added to the system; graphics, so the bar is 3:1). */
+  --color-rail-notable: #7c6ba8; /* 4.27 · 3.90 · 3.35 · 2.84 ✕ not on 300 */
+  --color-fill-routine: #3a3a3a; /* 1.74:1 — exempt, decorative. See docs. */
+
+  /* -- Semantics: four, closed. Each ships a word or glyph as well. -------- */
+  --color-recent: #5fd68a; /* 10.82:1 — gap 0-2. + "last night" + ● */
+  --color-rare: #f0b429; /* 10.62:1 — 1-2 lifetime plays. + ◇ + count */
+  --color-provisional: #7fd3d3; /* 11.46:1 — incomplete. + dashed edge */
+  --color-error: #ff7a70; /*  7.80:1 — FAILURE ONLY, never "no data" */
+
+  --color-disabled: #5a5a5a; /* 2.87:1 — exempt; see docs for the two uses */
+
+  --color-focus-ring: #d9c6ff; /* 12.70 · 11.61 · 9.96 · 8.47 */
+
+  /* -- Faces. Each has one job. -------------------------------------------
+     Composed from the raw family variables that next/font defines on <html>
+     (see app/layout.tsx). The fallbacks matter: tabular-nums is declared
+     explicitly on every numeric role precisely so alignment survives a fallback
+     to a proportional system font. */
+  --font-display: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
+  --font-body: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, "SF Mono", monospace;
+
+  /* -- Space. Base unit 4px; nothing is hand-nudged. ----------------------- */
+  --spacing-1: 4px; /* icon-to-label, tight sublines */
+  --spacing-2: 8px; /* chip gaps, bar-to-numeral */
+  --spacing-3: 12px; /* song row vertical padding (compact) */
+  --spacing-4: 16px; /* mobile gutter, card inner gap */
+  --spacing-5: 20px; /* mobile page margin, card padding */
+  --spacing-6: 24px; /* desktop gutter, callout padding */
+  --spacing-7: 32px; /* tablet margin, block separation */
+  --spacing-8: 40px; /* desktop margin */
+  --spacing-9: 56px; /* section rhythm, mobile */
+  --spacing-10: 72px; /* section rhythm, desktop */
+  --spacing-11: 96px; /* page top desktop, footer clearance */
+
+  /* -- Breakpoints. ------------------------------------------------------- */
+  --breakpoint-tablet: 600px;
+  --breakpoint-desktop: 1024px;
+
+  /* -- Motion. Nothing loops, bounces, or animates on scroll. ------------- */
+  --ease-gap-fill: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+
+  --duration-press: 80ms; /* hover / focus / press — bg + border only */
+  --duration-skeleton: 120ms; /* skeleton → content, opacity only */
+  --duration-panel: 120ms; /* typeahead open */
+  --duration-sort: 180ms; /* filter / sort crossfade */
+  --duration-page: 240ms; /* artist → show */
+  --duration-bar: 420ms; /* gap bar fill */
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+/* ---------------------------------------------------------------------------
+   Type roles. Each is a named class because the role, not the size, is what
+   carries meaning — and because `numeric` has five size variants that must stay
+   recognisably one family.
+   --------------------------------------------------------------------------- */
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer components {
+  /* Hero gap numeral. ONE per screen. The only role permitted the loud accent. */
+  .t-display {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 40px;
+    line-height: 40px;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+  }
+  @media (width >= 600px) {
+    .t-display {
+      font-size: 44px;
+      line-height: 44px;
+    }
+  }
+
+  .t-page-title {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 34px;
+    line-height: 36px;
+    letter-spacing: -0.022em;
+    text-wrap: balance;
+  }
+  @media (width >= 1024px) {
+    .t-page-title {
+      font-size: 40px;
+      line-height: 42px;
+    }
+  }
+
+  .t-section-header {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 21px;
+    line-height: 26px;
+    letter-spacing: -0.015em;
+  }
+  .t-minor-header {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 17px;
+    line-height: 22px;
+    letter-spacing: -0.015em;
+  }
+
+  .t-item-title {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 15px;
+    line-height: 20px;
+  }
+
+  /* Inter takes over the moment text runs past two lines. Max 74ch. */
+  .t-body {
+    font-family: var(--font-body);
+    font-weight: 400;
+    font-size: 13px;
+    line-height: 1.65;
+    max-width: 74ch;
+  }
+  .t-small {
+    font-family: var(--font-body);
+    font-weight: 400;
+    font-size: 11.5px;
+    line-height: 18.5px;
+  }
+
+  .t-metadata {
+    font-family: var(--font-mono);
+    font-weight: 400;
+    font-size: 12px;
+    line-height: 18px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* tabular-nums is declared explicitly on every numeric role: JetBrains Mono
+     is fixed-pitch, but the declaration survives a fallback to a proportional
+     system font. */
+  .t-numeric {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 20px;
+    line-height: 23px;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+  }
+  .t-numeric-stat {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 28px;
+    line-height: 30px;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Row-weight progression. Load-bearing: these three sizes ARE the hierarchy
+     on the show detail setlist, moving together with weight, background, left
+     edge and colour. */
+  .t-numeric-row-routine {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 13px;
+    line-height: 16px;
+    font-variant-numeric: tabular-nums;
+  }
+  .t-numeric-row-notable {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 16px;
+    line-height: 19px;
+    font-variant-numeric: tabular-nums;
+  }
+  .t-numeric-row-bust {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 21px;
+    line-height: 24px;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+  }
+  @media (width >= 600px) {
+    .t-numeric-row-bust {
+      font-size: 24px;
+      line-height: 27px;
+    }
+  }
+
+  /* Always paired with a value. 9.5px floor. */
+  .t-label {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 10px;
+    line-height: 14px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .t-label-sm {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 9.5px;
+    line-height: 13px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  /* The 18px halo that actually carries the loud accent at a glance. */
+  .gap-halo {
+    text-shadow: 0 0 18px rgb(172 125 255 / 0.4);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ---------------------------------------------------------------------------
+   Base
+   --------------------------------------------------------------------------- */
+
+@layer base {
+  html {
+    background: var(--color-surface-000);
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-surface-000);
+    color: var(--color-text-primary);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Applied on :focus-visible only; never removed, never replaced by a colour
+     change. Not transitioned — it must appear on the same frame as the
+     keystroke. */
+  :focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--color-surface-000),
+      0 0 0 4px var(--color-focus-ring);
+  }
+
+  ::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-gap-track);
+    border-radius: 5px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Motion. Everything sits behind prefers-reduced-motion, where transforms
+   become instant and only opacity crossfades at 80ms.
+   --------------------------------------------------------------------------- */
+
+@keyframes td-shimmer {
+  0% {
+    background-position: -180px 0;
+  }
+  100% {
+    background-position: 220px 0;
+  }
+}
+
+@keyframes td-bar-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 80ms !important;
+    transition-property: opacity !important;
+    scroll-behavior: auto !important;
+  }
 }
