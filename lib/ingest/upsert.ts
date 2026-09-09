@@ -281,14 +281,29 @@ export async function refreshArtistRollups(
 
   const backfillComplete = pagesFetched >= expectedPages;
 
-  await db
+  // GREATEST, never a bare assignment. pages_fetched records how deep we have ever gone,
+  // so a shallow run must not walk back a deeper one — the cron's refresh path fetches
+  // pages 1-2 of an already-complete artist, and overwriting would reset it to 2 and make
+  // every subsequent cycle re-fetch history we already hold. That is a silent, recurring
+  // waste of a 1,440/day budget.
+  const [updated] = await db
     .update(artists)
     .set({
       lastShowDate: row?.last_show_date ?? null,
-      pagesFetched,
-      backfillComplete,
+      pagesFetched: sql`GREATEST(${artists.pagesFetched}, ${pagesFetched})`,
+      backfillComplete: sql`
+        ${artists.backfillComplete}
+        OR GREATEST(${artists.pagesFetched}, ${pagesFetched}) >= ${expectedPages}
+      `,
     })
-    .where(eq(artists.id, artistId));
+    .where(eq(artists.id, artistId))
+    .returning({
+      pagesFetched: artists.pagesFetched,
+      backfillComplete: artists.backfillComplete,
+    });
 
-  return { lastShowDate: row?.last_show_date ?? null, backfillComplete };
+  return {
+    lastShowDate: row?.last_show_date ?? null,
+    backfillComplete: updated?.backfillComplete ?? backfillComplete,
+  };
 }
