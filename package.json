@@ -9,7 +9,9 @@
     "lint": "eslint",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:load-sample": "node scripts/load-sample.mts"
+    "db:load-sample": "node scripts/load-sample.mts",
+    "check:contrast": "node scripts/check-contrast.mts",
+    "check:queries": "node scripts/check-queries.mts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",

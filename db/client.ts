@@ -15,3 +15,12 @@ export type Db = NeonHttpDatabase<typeof schema>;
 export function createDb(url: string): Db {
   return drizzle(neon(url), { schema });
 }
+
+/**
+ * neon-http returns rows directly on some paths and `{ rows }` on others, depending on
+ * the query. Normalise once here rather than at every call site.
+ */
+export function rowsOf<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  return ((result as { rows?: unknown[] }).rows ?? []) as T[];
+}

@@ -67,11 +67,16 @@ history is *provisional*; conflating the two makes an archive gap look like a bu
 
 ---
 
-## The five AA exemptions
+## The AA exemptions
+
+`npm run check:contrast` enforces this list against the real token values in
+`app/globals.css`. Anything failing that is not listed here fails; anything listed here
+that starts passing is reported as stale. The list stays closed by being checked, not by
+being asserted.
 
 Three came from the design system. Two were added deliberately when the screens were
-implemented — added to the list rather than left to drift, so the list stays closed
-rather than porous.
+implemented, and a sixth was discovered by the check itself — all added to the list
+rather than left to drift.
 
 1. **`text-quaternary` `#8A8A8A` on `surface-300` — 3.82:1 — BANNED.**
    Inside the typeahead panel and any sheet, step up to `text-tertiary`.
@@ -89,6 +94,14 @@ rather than porous.
    states that **the bar is never the value** and prints the integer beside every bar, so
    a routine row's bar is decorative and redundant — the same class as `divider` and
    `border`. **It must never become the sole carrier of a magnitude.**
+
+6. **`text-quaternary` on `surface-200` — 4.4965:1 — a rounding artifact, not a
+   decision.** The design sheet records this pairing as "4.50" with no ✕ and treats it as
+   clearing AA. The true value is 0.0035 short, which the contrast check caught. It is
+   recorded rather than rounded away. If strict AA matters more than matching the sheet,
+   nudging `text-quaternary` one step lighter fixes it — the token is used for
+   placeholders and unit labels, which the system already says are "never the only
+   carrier of a fact".
 
 `border` `#1F1F1F` is separately structural and exempt from 3:1.
 
