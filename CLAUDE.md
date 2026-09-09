@@ -105,15 +105,44 @@ the Vercel project, or the site builds and then fails on first request:
 |---|---|
 | `DATABASE_URL` | every page and API route |
 | `DATABASE_URL_UNPOOLED` | `drizzle-kit` migrations only — not needed at runtime |
-| `SETLIST_API_KEY` | ingestion (`/api/artists/lookup`, `/api/ingest`, the cron) |
-| `INGEST_SECRET` | the two secret-guarded routes; the cron 401s without it |
+| `SETLIST_API_KEY` | ingestion (`/api/artists/lookup`, `/api/ingest`) |
+| `INGEST_SECRET` | the two secret-guarded routes |
+
+### This project is on Vercel Hobby — no cron jobs
+
+**Hobby allows a cron at most once per day, and a more frequent expression fails the
+deployment outright.** There is deliberately no `vercel.json`. A `crons` entry of
+`0 */6 * * *` blocked every deploy for five commits, and the failure mode is worth
+knowing because it is genuinely misleading:
+
+- Vercel rejects the config **before creating a deployment**, so the Deployments list
+  shows *nothing at all* — not a failed build, not an error row. It looks exactly like a
+  disconnected Git integration.
+- The real signal is on the commit in GitHub. Every push was received and rejected.
+
+Refresh and backfill are triggered by hand through `POST /api/ingest?secret=…`, which is
+what that endpoint is for. Don't reintroduce a cron without checking the plan first.
+
+### Diagnosing a deploy that never appears
+
+The dashboard can be empty and wrong. Ask GitHub what the host actually said:
+
+```
+gh api repos/dennyodowd/taperdeck/commits/$(git rev-parse HEAD)/status \
+  --jq '.statuses[0] | "\(.state)  \(.description)  \(.target_url)"'
+```
+
+Read the `target_url`: a **unique** `vercel.com/<org>/<project>/<id>` URL is a real build
+log to open. A **shared** `vercel.link/<code>` URL — the same on every failing commit — is
+a configuration rejection, and redirects to the documentation for the rule being broken.
+That is what identified the cron.
 
 **Never read `process.env` at module scope in anything `app/` imports.** Next evaluates
 page and route modules during "Collecting page data", even for `force-dynamic` routes, so
-a module-scope `throw` on a missing variable fails the entire build. That is what stopped
-deploys for four commits: it presents as "no deployment appeared", which looks like a git
-problem and is not. `db/index.ts` now connects lazily behind a Proxy for exactly this
-reason — read env inside the function that needs it.
+a module-scope `throw` on a missing variable fails the whole build. `db/index.ts`
+connects lazily behind a Proxy for this reason — read env inside the function that needs
+it. (This was a real latent bug but was *not* what blocked the deploys above; the
+variables were already set in Vercel.)
 
 To check a build the way the host sees it, with no local env:
 
