@@ -22,7 +22,7 @@ Bare `create-next-app` scaffold. Nothing product-specific exists.
 
 - [x] Next.js scaffold
 - [x] Domain live on Vercel, deploys on push to `main`
-- [ ] **Drizzle + Neon packages installed** — see below, the notes were wrong about this
+- [x] Drizzle + Neon installed
 - [ ] API connection verified (first curl returned 403)
 - [ ] Schema
 - [ ] Ingestion
@@ -32,12 +32,22 @@ Bare `create-next-app` scaffold. Nothing product-specific exists.
 ## Stack
 
 Next.js **16.3.4** (App Router), React **19.2.8**, TypeScript 5, Tailwind **v4**,
-ESLint 9. Postgres on Neon is the intended database.
+ESLint 9. Postgres on Neon via `drizzle-orm` + `@neondatabase/serverless`, migrations
+with `drizzle-kit`.
 
-**Drizzle and Neon are not installed yet.** `package.json` currently has only `next`,
-`react`, and `react-dom` as dependencies — no `drizzle-orm`, no `drizzle-kit`, no
-`@neondatabase/serverless`. The stack decision stands; the packages just aren't there.
-Installing them is part of the schema step, not a prerequisite already met.
+Database packages as installed:
+
+- `drizzle-orm` **0.45.2** and `@neondatabase/serverless` **1.1.0** (dependencies)
+- `drizzle-kit` **0.31.10** and `dotenv` **17.4.2** (dev dependencies)
+
+`drizzle-kit` runs outside Next.js, so it does not get Next's automatic `.env.local`
+loading — that is what `dotenv` is for. Point it at `DATABASE_URL_UNPOOLED`, not
+`DATABASE_URL`; migrations cannot run through the Neon pooler.
+
+`npm audit` reports 4 moderate advisories, all the same esbuild dev-server issue
+(GHSA-67mh-4wv8-2f99) reached through `drizzle-kit`'s deprecated `@esbuild-kit/*`
+dependencies. It is a dev-time-only advisory and `npm audit fix --force` would downgrade
+`drizzle-kit`, so it is left alone deliberately. Don't "fix" it without reading it first.
 
 Tailwind v4 is configured CSS-first through `@tailwindcss/postcss`. There is no
 `tailwind.config.*` file and one should not be added — v4 configuration lives in
