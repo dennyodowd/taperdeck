@@ -23,7 +23,7 @@ Bare `create-next-app` scaffold. Nothing product-specific exists.
 - [x] Next.js scaffold
 - [x] Domain live on Vercel, deploys on push to `main`
 - [x] Drizzle + Neon installed
-- [ ] API connection verified (first curl returned 403)
+- [x] API connection verified — see `sample.json`
 - [ ] Schema
 - [ ] Ingestion
 - [ ] Artist page
@@ -111,8 +111,24 @@ User-Agent: Taperdeck/0.1
 ```
 
 `Accept` is not optional — **the API returns XML by default.** Omitting it produces a
-parse failure that looks like a broken endpoint. A generic client `User-Agent` may be
-rejected, so always send a descriptive one.
+parse failure that looks like a broken endpoint. Send a descriptive `User-Agent` too;
+it is cheap insurance, though see below on what it does and doesn't explain.
+
+**On 403s.** The API sits behind AWS API Gateway, and a rejected key returns exactly
+`{"message":"Forbidden"}` — a 23-byte JSON body, not an HTML error page. If you see
+that, suspect the key itself, not the `User-Agent`; an edge/WAF block on `User-Agent`
+would show `X-Cache: Error from cloudfront` with no `x-amzn-ErrorType`. Run curl with
+`-v` and read the response headers before changing anything.
+
+The first 403 in this project was cleared by sending the key **trimmed**: the value in
+`.env.local` carried a trailing whitespace byte (37 bytes stored, 36 real). Always strip
+whitespace before putting a secret in a header. Note that this was fixed alongside
+adding a `User-Agent`, so the two were never isolated — the trailing byte is the more
+probable cause given the gateway evidence, but that is a strong inference, not a
+controlled result.
+
+**Never put a personal email address in the `User-Agent`.** MusicBrainz asks for contact
+info; use the repo URL unless the owner decides otherwise.
 
 **Rate limits: 1,440 requests/day, 2/second.** This is the standard tier and it's what
 we have. The 50,000/day tier needs a manual application that forum reports say can take
@@ -135,66 +151,95 @@ MusicBrainz needs no key but enforces roughly **1 request/second** and requires 
 setlist.fm's own `/search/artists?artistName=` may make MusicBrainz unnecessary.
 **Verify which path is better before building around either.**
 
-## Everything in this section is UNVERIFIED
+## Payload shape
 
-**No successful setlist.fm response has ever been captured.** The first curl returned
-`403 Forbidden`. Everything below comes from documentation and third-party wrappers —
-not from a payload we have seen. Treat it as a hypothesis to test, never as a spec to
-code against.
+`sample.json` in the repo root is the source of truth and outranks anything written
+here. It is a verbatim `GET /search/setlists?artistName=Phish&p=1`, captured
+**2026-09-09**, HTTP 200, 84,150 bytes.
 
-**First task in this repo: get a successful request, save the response as `sample.json`
-in the repo root, then correct this section against it.** After that, `sample.json` is
-the source of truth and outranks anything written here. Delete this warning when the
-section has been reconciled with a real payload.
+Read that scope honestly: **it is one page of 20 recent shows by one active touring
+band.** Anything it happens to contain is confirmed. Anything it happens *not* to
+contain is not thereby disproved — the "not observed here" list below stays defensive
+for exactly that reason.
 
-### Expected endpoints
+### Endpoints
 
-- `GET /search/setlists?artistName={name}&p={page}` — setlists by artist name
-- `GET /artist/{mbid}/setlists?p={page}` — setlists by MBID, probably the main one
+`GET /search/setlists?artistName={name}&p={page}` is confirmed working. The others are
+documented but not yet exercised:
+
+- `GET /artist/{mbid}/setlists?p={page}` — by MBID, probably the main ingestion path
 - `GET /search/artists?artistName={name}` — artist lookup
 - `GET /setlist/{setlistId}` — a single setlist
 
-### Expected envelope
+Phish's MBID, handy as a test fixture: `e01646f2-2a04-450d-8bf2-0d993082e058`.
+
+### Envelope
 
 ```
-{ "type": "setlists", "itemsPerPage": 20, "page": 1, "total": 1234, "setlist": [...] }
+{ "type": "setlists", "itemsPerPage": 20, "page": 1, "total": 2221, "setlist": [ … ] }
 ```
 
-Pagination is 20 per page and appears to be fixed.
+`itemsPerPage` is 20, as expected. `total` was **2,221 for Phish on 2026-09-09** — a
+time-sensitive figure, pinned per the convention below; it climbs as shows are added.
 
-### Expected setlist object
+### Setlist object
 
-`id`, `versionId`, `eventDate`, `lastUpdated`, `artist`, `venue`, `tour`, `sets`, `url`,
-`info`.
+All ten expected fields are present: `id`, `versionId`, `eventDate`, `lastUpdated`,
+`artist`, `venue`, `tour`, `sets`, `url`, `info`.
 
-- `artist` — `{ mbid, name, sortName, disambiguation, url }`
-- `venue` — `{ id, name, city: { id, name, state, stateCode, coords, country }, url }`
-- `tour` — `{ name }`, often absent
-- `sets` — `{ set: [ ... ] }`, note the nested `set` key
-- each set — optional `name` (e.g. "Acoustic set"), optional `encore` (a number), and
-  `song: [ ... ]`
-- each song — `name`, optional `info` (free text), optional `cover` (an artist object
-  for the original performer), optional `with` (a guest artist), optional `tape`
-  (boolean)
+- `id` and `versionId` — 8-char strings, and **they differ** (`5b4b5734` vs `g30cad0b`).
+  Upsert on `id`; `versionId` tracks edits to the same show.
+- `artist` — `{ mbid, name, sortName, disambiguation, url }`, as expected
+- `venue` — `{ id, name, url, city: { id, name, state, stateCode, country, coords } }`,
+  with `coords` as `{ lat, long }`
+- `tour` — `{ name }`, e.g. `{"name": "Summer Tour 2026"}`
+- `sets` — `{ set: [ … ] }`. The nested `set` key is real.
+- each set — `song: [ … ]`, optional `name`, optional `encore`
+- each song — `name`, optional `info`, optional `cover`, optional `tape`
 
-### Traps to verify first
+`info` appeared on 15 of 20 setlists and is free text about the show, not the songs
+(e.g. `Soundcheck: "My Soul", "My Soul jam"`).
 
-**`eventDate` is reportedly `dd-MM-yyyy` — day first.** If true this is the most
-dangerous field in the payload: `05-09-2026` parses as May 9th under any US-default
-parser and is actually September 5th. Every date before the 13th of a month parses to a
-plausible wrong answer. **Verify against a real response before writing any date
-handling**, and if confirmed, parse it explicitly rather than handing it to
-`new Date()`.
+### Confirmed traps
 
-**`tape: true` means the song was played over the PA, not performed.** Walk-out music,
-intermission tracks. Exclude these from rotation statistics — a band that plays the same
-walk-on track nightly would otherwise look like it has a lock-solid opener it has never
-actually performed.
+**`eventDate` is `dd-MM-yyyy` — day first. This is settled, not inferred.** Two
+independent proofs from `sample.json`: twelve of the twenty dates have a first component
+above 12 (`31-07-2026`, `29-07-2026`, …), which cannot be a month; and the page is
+strictly descending only when read day-first. The dangerous case is live in the sample —
+**`05-09-2026` is in there and it is 5 September 2026**, but `new Date("05-09-2026")`
+yields 9 May. Every date before the 13th of a month parses to a plausible wrong answer.
+**Split on `-` and construct explicitly. Never hand `eventDate` to `new Date()` or to
+`Date.parse`.**
 
-**Setlists can be empty.** A show with no songs entered yet still returns a setlist
-object with empty `sets`. Don't treat those as data.
+**`lastUpdated` is a different format from `eventDate`** — ISO 8601 with offset
+(`2026-09-07T15:32:31.848+0000`). Two date fields, two formats, one object. Do not write
+a single shared date parser and point it at both.
 
-**`tour` is frequently absent**, so tour-based grouping needs a fallback.
+**`tape: true` is real and confirms the trap.** One of 337 songs in the sample carries
+it: `"The Ed Sullivan Show introduction"`, played over the PA before a Beatles cover.
+Exclude `tape` songs from all rotation, gap, and opener statistics — they were not
+performed.
+
+**`cover` is common — 71 of 337 songs.** Shape is a full artist object for the original
+performer (`{ mbid, name, sortName, disambiguation, url }`), e.g. "Melt the Guns" →
+XTC. Common enough that covers need deliberate handling, not an afterthought.
+
+**Set names are inconsistently punctuated.** The sample contains `Set 1`, `Set 1:` and
+`Set 2:` — same concept, trailing colon sometimes present. Normalise before grouping or
+displaying. 40 of 59 sets were named; `encore` appeared on 19 sets, always the number 1.
+
+### Not observed in this sample — stay defensive
+
+None of these are disproved. A page of recent shows from an active band is the *least*
+likely place for any of them to appear.
+
+- **Empty `sets`** — 0 of 20 here, but a newly-added show with no songs entered is
+  exactly what the search endpoint would not surface. Keep skipping empty setlists.
+- **Absent `tour`** — present on 20 of 20 here, because these are all one named tour.
+  Older, one-off, and festival shows are the likely gap. Keep the grouping fallback.
+- **`with` (guest artist)** — 0 occurrences in 337 songs, so its shape is still
+  undocumented. Assume an artist object like `cover` until a real one is seen, and
+  re-check against a payload before building the guest-appearances feature.
 
 ## Architecture: lazy ingestion, then cache
 
