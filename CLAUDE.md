@@ -96,6 +96,31 @@ turns a missing-config error into a silent wrong answer.
 
 All three are currently populated.
 
+## Deploying
+
+**`.env.local` is gitignored and never ships.** Every variable above must also be set in
+the Vercel project, or the site builds and then fails on first request:
+
+| Variable | Needed for |
+|---|---|
+| `DATABASE_URL` | every page and API route |
+| `DATABASE_URL_UNPOOLED` | `drizzle-kit` migrations only — not needed at runtime |
+| `SETLIST_API_KEY` | ingestion (`/api/artists/lookup`, `/api/ingest`, the cron) |
+| `INGEST_SECRET` | the two secret-guarded routes; the cron 401s without it |
+
+**Never read `process.env` at module scope in anything `app/` imports.** Next evaluates
+page and route modules during "Collecting page data", even for `force-dynamic` routes, so
+a module-scope `throw` on a missing variable fails the entire build. That is what stopped
+deploys for four commits: it presents as "no deployment appeared", which looks like a git
+problem and is not. `db/index.ts` now connects lazily behind a Proxy for exactly this
+reason — read env inside the function that needs it.
+
+To check a build the way the host sees it, with no local env:
+
+```
+git archive HEAD | tar -x -C /tmp/vbuild && cd /tmp/vbuild && npm ci && npx next build
+```
+
 ## Data sources
 
 ### setlist.fm
