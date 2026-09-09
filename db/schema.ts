@@ -42,6 +42,12 @@ export const artists = pgTable("artists", {
   // Refresh jobs prioritise by this, not alphabetically.
   lastShowDate: date("last_show_date"),
 
+  // Ingestion progress. `gap` counts shows we hold, not shows that happened, so until
+  // backfillComplete is true every gap for this artist is understated — plausibly, which
+  // is what makes it dangerous. The UI keys its "still loading history" qualifier here.
+  pagesFetched: integer("pages_fetched").notNull().default(0),
+  backfillComplete: boolean("backfill_complete").notNull().default(false),
+
   raw: jsonb("raw"),
   firstIngestedAt: timestamp("first_ingested_at", { withTimezone: true })
     .notNull()
@@ -150,9 +156,13 @@ export const performances = pgTable(
       .references(() => songs.id, { onDelete: "cascade" }),
     // Denormalised. Immutable per row (a show never changes artist), and lets
     // artist-scoped statistics skip a join.
-    artistId: integer("artist_id")
-      .notNull()
-      .references(() => artists.id, { onDelete: "cascade" }),
+    //
+    // NOT a plain FK to artists. Migration 0005 replaces that with a COMPOSITE key
+    // (show_id, artist_id) -> shows(id, artist_id), because a plain reference let this
+    // column disagree with its show's artist — which silently misattributes every
+    // statistic that reads through performances_counted. Do not "restore" the simple
+    // reference here; it would reintroduce the hole.
+    artistId: integer("artist_id").notNull(),
 
     setIndex: integer("set_index").notNull(),
     position: integer("position").notNull(),

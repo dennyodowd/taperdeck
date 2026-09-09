@@ -2,29 +2,37 @@
  * Loads the committed sample.json into the database and asserts the schema behaves.
  *
  * This is a TEST FIXTURE, not the ingestion pipeline. No network, no pagination, no
- * run-log orchestration, no rate limiting. It exists so the schema is proven against the
- * real payload before ingestion is built on top of it.
+ * rate limiting, no run log.
  *
- *   node scripts/load-sample.mts
+ *   npm run db:load-sample
+ *
+ * It deliberately goes through the SAME lib/ code the live pipeline uses — the parsers
+ * in lib/setlistfm/parse.ts and the write path in lib/ingest/upsert.ts. If it had its own
+ * copies, it would stop proving anything about production.
  *
  * Re-running must be a no-op. That is one of the assertions.
  */
 
 import { readFileSync } from "node:fs";
 
-import { neon } from "@neondatabase/serverless";
 import { config as loadEnv } from "dotenv";
-import { drizzle } from "drizzle-orm/neon-http";
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 
-import { artists, performances, shows, venues } from "../db/schema.ts";
+import { createDb } from "../db/client.ts";
+import { MAX_PAGES_PER_ARTIST } from "../lib/ingest/run.ts";
+import {
+  refreshArtistRollups,
+  upsertArtist,
+  upsertSetlists,
+} from "../lib/ingest/upsert.ts";
+import type { SetlistsEnvelope } from "../lib/setlistfm/parse.ts";
 
 loadEnv({ path: ".env.local", quiet: true });
 
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error("DATABASE_URL is not set.");
 
-const db = drizzle(neon(url));
+const db = createDb(url);
 
 /**
  * The moment sample.json was captured. `total` is a now()-dependent figure, so it is
@@ -32,316 +40,53 @@ const db = drizzle(neon(url));
  */
 const CAPTURED_AT = new Date("2026-09-09T16:05:44Z");
 
-// --------------------------------------------------------------------------
-// Parsing
-// --------------------------------------------------------------------------
+/** sample.json is exactly one page, so pagesFetched is 1. */
+const SAMPLE_PAGES = 1;
 
 /**
- * eventDate is dd-MM-yyyy — day first. Proven against sample.json, where twelve of
- * twenty dates have a first component above 12, and where "05-09-2026" means
- * 5 September. new Date() reads that as 9 May, with no error and nothing downstream
- * that looks wrong. Split explicitly; never hand this field to a Date constructor.
+ * The fixture is loaded under its own synthetic artist identity, NOT under real Phish.
+ *
+ * Every assertion below is about a known, fixed 20-show page — "exactly 20 shows numbered
+ * 1..20", "192 songs", "337 performances". Live ingestion deepens real Phish past 200
+ * shows, which would break all of them and make the suite look broken when nothing is.
+ * Isolating the fixture keeps its assertions exact and repeatable, and keeps it from
+ * writing over ingested data.
  */
-function parseEventDate(value: string): string {
-  const m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(value);
-  if (!m) throw new Error(`eventDate is not dd-MM-yyyy: ${JSON.stringify(value)}`);
-
-  const [, dd, mm, yyyy] = m;
-  const day = Number(dd);
-  const month = Number(mm);
-
-  // If setlist.fm ever flips to month-first, this throws on the first date past the
-  // 12th rather than silently producing plausible wrong answers for a year.
-  if (month < 1 || month > 12) {
-    throw new Error(`month out of range in eventDate ${value} — format may have changed`);
-  }
-  if (day < 1 || day > 31) {
-    throw new Error(`day out of range in eventDate ${value}`);
-  }
-
-  return `${yyyy}-${mm}-${dd}`;
-}
+const FIXTURE_MBID = "00000000-0000-4000-8000-000000000001";
+const FIXTURE_NAME = "Phish (sample.json fixture)";
 
 /**
- * lastUpdated is ISO 8601 with an offset — a DIFFERENT format from eventDate. This is
- * the only date field in the payload that may go through Date parsing, which is exactly
- * why it gets its own function rather than sharing one.
+ * Show ids are namespaced too. shows.id is the primary key, so without this the sample's
+ * twenty rows would collide with the same twenty shows already held under real Phish and
+ * stay attached to that artist — leaving the fixture artist empty and every assertion
+ * failing for a reason that has nothing to do with the schema.
  */
-function parseLastUpdated(value: string | undefined): Date | null {
-  if (!value) return null;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) {
-    throw new Error(`lastUpdated is not parseable ISO 8601: ${JSON.stringify(value)}`);
-  }
-  return d;
-}
-
-/** "Set 1", "Set 1:" and "Set 2:" are the same concept in the payload. */
-function normaliseSetName(value: string | undefined): string | null {
-  if (!value) return null;
-  const trimmed = value.replace(/\s*:\s*$/, "").trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-// --------------------------------------------------------------------------
-// Payload types — only the fields this fixture touches.
-// --------------------------------------------------------------------------
-
-type ApiArtist = {
-  mbid: string;
-  name: string;
-  sortName?: string;
-  disambiguation?: string;
-  url?: string;
-};
-
-type ApiSong = {
-  name: string;
-  info?: string;
-  tape?: boolean;
-  cover?: ApiArtist;
-  with?: unknown;
-};
-
-type ApiSet = { name?: string; encore?: number; song?: ApiSong[] };
-
-type ApiSetlist = {
-  id: string;
-  versionId?: string;
-  eventDate: string;
-  lastUpdated?: string;
-  artist: ApiArtist;
-  venue?: {
-    id: string;
-    name: string;
-    url?: string;
-    city?: {
-      id?: string;
-      name?: string;
-      state?: string;
-      stateCode?: string;
-      country?: { code?: string; name?: string };
-      coords?: { lat?: number; long?: number };
-    };
-  };
-  tour?: { name?: string };
-  sets: { set?: ApiSet[] };
-  url?: string;
-  info?: string;
-};
-
-type ApiEnvelope = { total: number; setlist: ApiSetlist[] };
-
-// --------------------------------------------------------------------------
-// Load
-// --------------------------------------------------------------------------
+const FIXTURE_ID_PREFIX = "fx";
 
 async function load() {
   const payload = JSON.parse(
     readFileSync("sample.json", "utf8"),
-  ) as ApiEnvelope;
+  ) as SetlistsEnvelope;
 
-  const setlists = payload.setlist;
-  const apiArtist = setlists[0].artist;
-
-  // -- artist ------------------------------------------------------------
-  const [artist] = await db
-    .insert(artists)
-    .values({
-      mbid: apiArtist.mbid,
-      name: apiArtist.name,
-      sortName: apiArtist.sortName,
-      disambiguation: apiArtist.disambiguation,
-      url: apiArtist.url,
-      totalReported: payload.total,
-      totalReportedAt: CAPTURED_AT,
-      raw: apiArtist,
-      lastIngestedAt: CAPTURED_AT,
-    })
-    .onConflictDoUpdate({
-      target: artists.mbid,
-      set: {
-        name: apiArtist.name,
-        totalReported: payload.total,
-        totalReportedAt: CAPTURED_AT,
-        lastIngestedAt: CAPTURED_AT,
-      },
-    })
-    .returning({ id: artists.id });
-
-  const artistId = artist.id;
-
-  // -- venues ------------------------------------------------------------
-  const venueRows = new Map<string, typeof venues.$inferInsert>();
-  for (const sl of setlists) {
-    const v = sl.venue;
-    if (!v) continue;
-    venueRows.set(v.id, {
-      id: v.id,
-      name: v.name,
-      cityId: v.city?.id,
-      cityName: v.city?.name,
-      state: v.city?.state,
-      stateCode: v.city?.stateCode,
-      countryCode: v.city?.country?.code,
-      countryName: v.city?.country?.name,
-      lat: v.city?.coords?.lat,
-      long: v.city?.coords?.long,
-      raw: v,
-    });
-  }
-  if (venueRows.size > 0) {
-    await db
-      .insert(venues)
-      .values([...venueRows.values()])
-      .onConflictDoUpdate({
-        target: venues.id,
-        set: { name: sql`excluded.name`, raw: sql`excluded.raw` },
-      });
-  }
-
-  // -- shows -------------------------------------------------------------
-  // performed_song_count counts non-tape songs only, so a show that is nothing but PA
-  // music does not count as performed and never consumes an ordinal.
-  const showRows = setlists.map((sl) => {
-    const performedSongCount = (sl.sets.set ?? []).reduce(
-      (n, s) => n + (s.song ?? []).filter((sg) => sg.tape !== true).length,
-      0,
-    );
-    return {
-      id: sl.id,
-      versionId: sl.versionId,
-      artistId,
-      venueId: sl.venue?.id,
-      eventDate: parseEventDate(sl.eventDate),
-      lastUpdated: parseLastUpdated(sl.lastUpdated),
-      tourName: sl.tour?.name,
-      info: sl.info,
-      url: sl.url,
-      performedSongCount,
-      raw: sl,
-    } satisfies typeof shows.$inferInsert;
-  });
-
-  // Upsert on the setlist id: refresh jobs re-fetch the same shows constantly and a
-  // rerun must be a no-op. show_seq is deliberately absent — the trigger owns it.
-  await db
-    .insert(shows)
-    .values(showRows)
-    .onConflictDoUpdate({
-      target: shows.id,
-      set: {
-        versionId: sql`excluded.version_id`,
-        eventDate: sql`excluded.event_date`,
-        lastUpdated: sql`excluded.last_updated`,
-        tourName: sql`excluded.tour_name`,
-        info: sql`excluded.info`,
-        performedSongCount: sql`excluded.performed_song_count`,
-        raw: sql`excluded.raw`,
-      },
-    });
-
-  // -- songs -------------------------------------------------------------
-  // A cover is the SAME identity as an original; the original performer is an attribute.
-  const distinctNames = new Map<string, ApiSong>();
-  for (const sl of setlists) {
-    for (const set of sl.sets.set ?? []) {
-      for (const song of set.song ?? []) {
-        if (!distinctNames.has(song.name)) distinctNames.set(song.name, song);
-      }
-    }
-  }
-
-  const songValues = [...distinctNames.values()].map((s) => ({
-    name: s.name,
-    mbid: s.cover?.mbid ?? null,
-    cover: s.cover?.name ?? null,
-  }));
-
-  // DISTINCT ON the match key server-side: two different raw spellings can collapse to
-  // one identity, and ON CONFLICT DO UPDATE cannot touch the same row twice in one
-  // statement. Deduplicating in JS would need a second implementation of the normaliser,
-  // which could drift from the database's. There is only ever one normaliser.
-  await db.execute(sql`
-    INSERT INTO songs (artist_id, name, cover_artist_mbid, cover_artist_name)
-    SELECT DISTINCT ON (taperdeck_song_key(v.name))
-           ${artistId}, v.name, v.mbid, v.cover
-      FROM jsonb_to_recordset(${JSON.stringify(songValues)}::jsonb)
-        AS v(name text, mbid uuid, cover text)
-     ORDER BY taperdeck_song_key(v.name), v.name
-    ON CONFLICT (artist_id, match_key) DO NOTHING
-  `);
-
-  // Map raw name -> song id, with the key computed by the database so there is no
-  // second implementation to drift.
-  const keyed = (await db.execute(sql`
-    SELECT v.name AS raw_name, s.id AS song_id
-      FROM unnest(${sql.raw(
-        `ARRAY[${[...distinctNames.keys()]
-          .map((n) => `'${n.replace(/'/g, "''")}'`)
-          .join(",")}]::text[]`,
-      )}) AS v(name)
-      JOIN songs s
-        ON s.artist_id = ${artistId}
-       AND s.match_key = taperdeck_song_key(v.name)
-  `)) as unknown as { rows?: Array<{ raw_name: string; song_id: number }> };
-
-  const rows = Array.isArray(keyed) ? keyed : (keyed.rows ?? []);
-  const songIdByName = new Map<string, number>();
-  for (const r of rows as Array<{ raw_name: string; song_id: number }>) {
-    songIdByName.set(r.raw_name, Number(r.song_id));
-  }
-
-  // -- performances ------------------------------------------------------
-  // Replace rather than upsert: a show edited upstream can lose or reorder songs, and
-  // stale rows would quietly distort every statistic. Cascades on show delete.
-  const showIds = showRows.map((s) => s.id);
-  await db.execute(
-    sql`DELETE FROM performances WHERE show_id IN (${sql.join(
-      showIds.map((id) => sql`${id}`),
-      sql`, `,
-    )})`,
+  const setlists = payload.setlist ?? [];
+  const artistId = await upsertArtist(
+    db,
+    { ...setlists[0].artist, mbid: FIXTURE_MBID, name: FIXTURE_NAME },
+    { totalReported: payload.total, capturedAt: CAPTURED_AT },
   );
 
-  const perfRows: Array<typeof performances.$inferInsert> = [];
-  for (const sl of setlists) {
-    (sl.sets.set ?? []).forEach((set, setIndex) => {
-      (set.song ?? []).forEach((song, position) => {
-        const songId = songIdByName.get(song.name);
-        if (songId === undefined) {
-          throw new Error(`no song id resolved for ${JSON.stringify(song.name)}`);
-        }
-        perfRows.push({
-          showId: sl.id,
-          songId,
-          artistId,
-          setIndex,
-          position,
-          setNameRaw: set.name,
-          setName: normaliseSetName(set.name),
-          encore: set.encore,
-          isTape: song.tape === true,
-          info: song.info,
-          guest: song.with ?? null,
-          nameRaw: song.name,
-        });
-      });
-    });
-  }
+  const counts = await upsertSetlists(
+    db,
+    artistId,
+    setlists.map((sl) => ({ ...sl, id: `${FIXTURE_ID_PREFIX}${sl.id}` })),
+  );
+  await refreshArtistRollups(db, artistId, SAMPLE_PAGES, MAX_PAGES_PER_ARTIST);
 
-  if (perfRows.length > 0) {
-    await db.insert(performances).values(perfRows);
-  }
-
-  // -- artist rollup -----------------------------------------------------
-  await db
-    .update(artists)
-    .set({
-      lastShowDate: sql`(SELECT max(event_date) FROM shows WHERE artist_id = ${artistId})`,
-    })
-    .where(eq(artists.id, artistId));
-
-  return { artistId, showCount: showRows.length, perfCount: perfRows.length };
+  return {
+    artistId,
+    showCount: counts.shows,
+    perfCount: counts.performances,
+  };
 }
 
 // --------------------------------------------------------------------------
@@ -516,17 +261,18 @@ console.log(
 await verify(first.artistId);
 
 console.log("\n--- idempotency: second load must change nothing ---");
-const before = await one<{ shows: number; perfs: number; songs: number }>(sql`
-  SELECT (SELECT count(*)::int FROM shows) AS shows,
-         (SELECT count(*)::int FROM performances) AS perfs,
-         (SELECT count(*)::int FROM songs) AS songs
-`);
+// Scoped to the fixture artist, not global: other artists are being ingested live, so a
+// global count would drift for reasons that have nothing to do with idempotency.
+const countsFor = (id: number) => sql`
+  SELECT (SELECT count(*)::int FROM shows WHERE artist_id = ${id}) AS shows,
+         (SELECT count(*)::int FROM performances WHERE artist_id = ${id}) AS perfs,
+         (SELECT count(*)::int FROM songs WHERE artist_id = ${id}) AS songs
+`;
+
+type Counts = { shows: number; perfs: number; songs: number };
+const before = await one<Counts>(countsFor(first.artistId));
 await load();
-const afterSecond = await one<{ shows: number; perfs: number; songs: number }>(sql`
-  SELECT (SELECT count(*)::int FROM shows) AS shows,
-         (SELECT count(*)::int FROM performances) AS perfs,
-         (SELECT count(*)::int FROM songs) AS songs
-`);
+const afterSecond = await one<Counts>(countsFor(first.artistId));
 check("re-running the loader is a no-op", afterSecond, before);
 
 console.log(failures === 0 ? "\nAll assertions passed." : `\n${failures} assertion(s) FAILED.`);

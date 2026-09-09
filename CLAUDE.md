@@ -25,7 +25,7 @@ Bare `create-next-app` scaffold. Nothing product-specific exists.
 - [x] Drizzle + Neon installed
 - [x] API connection verified — see `sample.json`
 - [x] Schema
-- [ ] Ingestion
+- [x] Ingestion
 - [ ] Artist page
 - [ ] Landing page
 
@@ -134,22 +134,34 @@ info; use the repo URL unless the owner decides otherwise.
 we have. The 50,000/day tier needs a manual application that forum reports say can take
 months. Design for 1,440.
 
+**The documented 2/second is not the whole rule.** Spacing requests at 550ms (~1.8/sec,
+inside the documented limit) drew `429`s on the first live run. 1,100ms (~0.9/sec) has
+proved reliable, and `lib/setlistfm/client.ts` also retries a 429 twice with backoff.
+Latency is free here — at 1,440/day the budget will always bind before throughput does.
+**Don't "optimise" that spacing back down.**
+
 **The key deactivates after a year with no requests**, and reactivation is a slow manual
 review. If this project goes dormant, assume the key is dead when it comes back.
 
 **Terms are non-commercial.** Keep attribution and links back to setlist.fm visible on
 any page showing their data.
 
-### MusicBrainz
+### MusicBrainz is not used — settled, don't reintroduce it
 
-setlist.fm keys artists by **MusicBrainz ID (MBID)** — a UUID, not a name. Resolving
-"Radiohead" to an MBID may mean a MusicBrainz lookup first.
+setlist.fm keys artists by MusicBrainz ID, but **`/search/artists` returns the `mbid`
+directly**, so no MusicBrainz call is needed. Confirmed against a real response:
+`?artistName=Phish&sort=relevance` returns the correct band ahead of tribute acts, with
+the expected mbid.
 
-MusicBrainz needs no key but enforces roughly **1 request/second** and requires a
-`User-Agent` identifying the app with contact info. Violating either gets you blocked.
+Always pass `sort=relevance`. The default is `sortName`, which does not put the obvious
+match first.
 
-setlist.fm's own `/search/artists?artistName=` may make MusicBrainz unnecessary.
-**Verify which path is better before building around either.**
+This removes a second rate limit (MusicBrainz allows ~1 req/sec) and its requirement for
+contact details in the `User-Agent`. Don't add it back without a reason the search
+endpoint cannot cover.
+
+**`itemsPerPage` is 30 on `/search/artists`, not 20.** Page size is not uniform across
+the API — never hard-code 20 as a global.
 
 ## Payload shape
 
@@ -228,18 +240,25 @@ XTC. Common enough that covers need deliberate handling, not an afterthought.
 `Set 2:` — same concept, trailing colon sometimes present. Normalise before grouping or
 displaying. 40 of 59 sets were named; `encore` appeared on 19 sets, always the number 1.
 
-### Not observed in this sample — stay defensive
+### Confirmed by later ingests — all three were real
 
-None of these are disproved. A page of recent shows from an active band is the *least*
-likely place for any of them to appear.
+These were unobserved in `sample.json` and recorded as "not disproved". Live ingestion of
+Goose, Dua Lipa, The Velvet Underground and Bill Ryder-Jones found all three. The
+defensive handling was warranted.
 
-- **Empty `sets`** — 0 of 20 here, but a newly-added show with no songs entered is
-  exactly what the search endpoint would not surface. Keep skipping empty setlists.
-- **Absent `tour`** — present on 20 of 20 here, because these are all one named tour.
-  Older, one-off, and festival shows are the likely gap. Keep the grouping fallback.
-- **`with` (guest artist)** — 0 occurrences in 337 songs, so its shape is still
-  undocumented. Assume an artist object like `cover` until a real one is seen, and
-  re-check against a payload before building the guest-appearances feature.
+- **Empty `sets` are common.** 66 of 100 Velvet Underground shows and 38 of 100 Bill
+  Ryder-Jones shows have no songs entered. Far from an edge case — these are shows that
+  exist in the database with nothing in them. They must never consume a show ordinal.
+- **Absent `tour` is the norm for some artists.** 94 of 100 Bill Ryder-Jones shows have
+  no tour name at all. Tour-based grouping needs a real fallback, not a nullish check.
+- **`with` (guest artist) is a single artist object**, the same shape as `cover`:
+  `{ mbid, name, sortName, disambiguation, url }`. Always an object, never an array in
+  100 observed cases, and `mbid` was present in all 100. Goose had 67 guest performances
+  in 100 shows, Dua Lipa 33.
+
+Still unknown: whether a song can carry **more than one** guest. Every observed `with` is
+a single object, so the column stays `jsonb` rather than a foreign key until that is
+settled.
 
 ## Schema
 
@@ -278,6 +297,14 @@ played this". 20 of the 71 covers in `sample.json` are Phish side projects (Trey
 Anastasio, TAB, Ghosts of The Forest, Vida Blue); separate identities would exile a chunk
 of the band's own repertoire from its own rotation stats.
 
+**`performances.artist_id` is bound to its show by a composite foreign key**
+(`(show_id, artist_id) -> shows(id, artist_id)`, migration 0005). It was a plain
+reference to `artists` and drifted in practice — a run that loaded the same setlists
+under a second artist identity left 337 rows whose `artist_id` disagreed with their
+show's. Everything reads through `performances_counted`, which filters on that column, so
+misattributed rows corrupt every statistic while looking completely normal. `db/schema.ts`
+therefore declares the column with **no** `.references()`. Don't restore it.
+
 ### Gap is relative to the shows we hold
 
 `current_gap` counts shows **in our database**, not shows that happened. While an
@@ -298,6 +325,62 @@ Note the deliberate off-by-one in those assertions: 192 songs are stored but 191
 `song_gap`, and 105 songs were played once but gap sees 104. Both gaps are the same
 tape-only row being correctly excluded. If those numbers ever match, the tape filter has
 stopped working.
+
+## Ingestion
+
+`lib/setlistfm/` is the only place that talks to the API; `lib/ingest/` owns the write
+path and orchestration. `scripts/load-sample.mts` goes through **the same** `lib/` code —
+if it had its own copy of the parsers, it would stop proving anything about production.
+
+Constants in `lib/ingest/run.ts`:
+
+| | |
+|---|---|
+| `FIRST_PULL_PAGES` = 5 | ~100 shows; what a first lookup fetches before rendering |
+| `MAX_PAGES_PER_RUN` = 10 | no single run may monopolise the budget |
+| `MAX_PAGES_PER_ARTIST` = 60 | ~1,200 shows; hard depth cap, never loop to exhaustion |
+| `DAILY_REQUEST_BUDGET` = 1200 | of 1,440 — the headroom is for debugging |
+
+### Endpoints
+
+- `POST /api/artists/lookup` `{"name":"..."}` — the lazy trigger. Serves from the
+  database if we hold the artist (costing nothing), otherwise resolves and does a
+  first pull. No secret; this is what a search box calls.
+- `POST /api/ingest?secret=…` — manual ingest. `GET` the same path returns the budget
+  and the last 20 runs.
+- `GET /api/cron/refresh?secret=…` — deepens the least-complete artist, else refreshes
+  the most recently active. Scheduled every 6h in `vercel.json`; callable by hand
+  because waiting for a cron to test a cron is not workable.
+
+`INGEST_SECRET` guards the last two. It is in `.env.local` and **must also be set in the
+Vercel project** or the cron will 401 in production.
+
+### The global ingest lock
+
+Only one ingest may run at a time, enforced by a partial unique index
+(`ingest_runs_single_running_idx`) that permits a single `running` row. A second
+concurrent claim fails on insert rather than racing through a check-then-insert window.
+
+This is what makes the client's in-process request spacing meaningful: serverless
+instances don't share memory, so without global serialisation two simultaneous lookups
+would each believe they were within the rate limit. A Postgres advisory lock would be the
+textbook answer and does not work here — advisory locks are session-scoped and
+`neon-http` is stateless HTTP.
+
+Runs left `running` by a crashed invocation are released after 10 minutes, or the lock
+would wedge permanently.
+
+### Failures stay distinguishable
+
+Verified by observation, not assumption: a corrupted key yields `AUTH_FAILED`, a nonsense
+name yields `ARTIST_NOT_FOUND`, and both are recorded on the `ingest_runs` row with a
+non-2xx response. A rate limit yields `RATE_LIMITED` and an artist with genuinely no
+setlists yields `NO_SETLISTS`. **A broken key must never look like an obscure band.**
+
+setlist.fm returns **404 for an empty result**, not an empty list — confirmed. On
+`/search/artists` that means `ARTIST_NOT_FOUND`; on a setlists page it means
+`NO_SETLISTS` if it is the first page requested, or simply the end of the history if it
+is not.
 
 ## Architecture: lazy ingestion, then cache
 

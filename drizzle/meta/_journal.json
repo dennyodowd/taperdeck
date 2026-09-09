@@ -22,6 +22,34 @@
       "when": 1788971636972,
       "tag": "0002_sequencing",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788973430346,
+      "tag": "0003_artist_ingest_progress",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788973494769,
+      "tag": "0004_ingest_lock",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788974288787,
+      "tag": "0005_performance_artist_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788974334620,
+      "tag": "0006_sync_snapshot",
+      "breakpoints": true
     }
   ]
 }

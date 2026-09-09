@@ -1,7 +1,4 @@
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
-
-import * as schema from "./schema";
+import { createDb } from "./client.ts";
 
 const url = process.env.DATABASE_URL;
 
@@ -12,6 +9,7 @@ if (!url) {
   );
 }
 
-export const db = drizzle(neon(url), { schema });
+export const db = createDb(url);
 
-export * from "./schema";
+export type { Db } from "./client.ts";
+export * from "./schema.ts";
