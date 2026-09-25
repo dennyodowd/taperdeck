@@ -391,6 +391,12 @@ renumbers everything beneath it, that an empty setlist consumes no ordinal, that
 `tape` row is excluded from `song_gap`, and that re-running changes nothing. It is a test
 fixture, not the ingestion pipeline: no network, no pagination, no run log.
 
+**It runs against production** — there is only one database (see "One database:
+production") — so it deletes the fixture artist when it finishes, pass or fail, and
+asserts that it is gone. The fixture is `Phish (sample.json fixture)`, mbid
+`00000000-0000-4000-8000-000000000001`; left behind, it showed on the public landing page
+as a second Phish and duplicated the feed. Don't remove the cleanup.
+
 Note the deliberate off-by-one in those assertions: 192 songs are stored but 191 reach
 `song_gap`, and 105 songs were played once but gap sees 104. Both gaps are the same
 tape-only row being correctly excluded. If those numbers ever match, the tape filter has
@@ -419,11 +425,12 @@ Constants in `lib/ingest/run.ts`:
 - `POST /api/ingest?secret=…` — manual ingest. `GET` the same path returns the budget
   and the last 20 runs.
 - `GET /api/cron/refresh?secret=…` — deepens the least-complete artist, else refreshes
-  the most recently active. Scheduled every 6h in `vercel.json`; callable by hand
-  because waiting for a cron to test a cron is not workable.
+  the most recently active. **Not scheduled** — see "This project is on Vercel Hobby"
+  above; call it by hand.
 
 `INGEST_SECRET` guards the last two. It is in `.env.local` and **must also be set in the
-Vercel project** or the cron will 401 in production.
+Vercel project** or they will 401 in production. The Vercel firewall has a bypass rule
+for `/api/ingest` and `/api/cron/` so a `curl` to them is not served a bot challenge.
 
 ### The global ingest lock
 
@@ -496,6 +503,39 @@ Prioritise by recency of last show, not alphabetically.
 
 **Seed a handful of artists before launch** so the landing page shows something without
 the visitor typing anything. Pick bands with genuinely variable setlists.
+
+### Keeping Neon asleep
+
+Neon bills for the time the compute is awake, and it suspends only after 5 idle
+minutes, so one request every few minutes costs almost as much as heavy traffic. On
+2026-09-24 the compute was found awake while nobody used the site: a single automated
+visit to `/` fanned out into ~25 page renders through `<Link>` prefetch, each running
+live queries, with autoscaling allowed up to 8 CU. What now stands against that:
+
+- **Pages read through `lib/queries/cached.ts`, never `lib/queries/*` directly.** Every
+  screen query is wrapped in `unstable_cache` under one tag and served from Next's data
+  cache until an ingest invalidates it. Read that file's header before adding a query:
+  results must be JSON-safe, entries **survive deploys** (bump `CACHE_VERSION` when a
+  query's output shape changes), and invalidation is lost if an ingest route *throws*
+  rather than returns. `unstable_cache` over `use cache` was a deliberate choice —
+  plain `use cache` is per-instance memory on serverless and would not have helped.
+- **Every route that ingests calls `invalidateData()`** in a `finally`. A new write
+  path must too. `scripts/ingest-artists.mts` runs outside Next and cannot; its writes
+  appear within 24h, or immediately after any ingest through the API.
+- **List links use `prefetch={false}`** — the landing feed and band grid, recent shows,
+  and "This run". One visit must cost one render, not one per link.
+- **`app/robots.txt`** keeps crawlers out of `/api/`.
+- **Outside the code** (set by hand, not visible in the repo): Vercel Bot Protection on
+  *challenge*, AI bots *denied*, and the `/api/ingest` + `/api/cron/` bypass rule above.
+  In Neon, scale-to-zero stays on and the
+  autoscaling ceiling stays low — every burst scales to whatever the ceiling allows, and
+  the dashboard, not this file, is the record of what it is.
+
+## One database: production
+
+There is no dev branch, deliberately — this is a demo. **`.env.local` points at
+production**, so `next dev`, every script and `db:load-sample` read and write the live
+database. Anything run locally is visible on the public site; clean up after it.
 
 ## Conventions
 

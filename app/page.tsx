@@ -2,14 +2,9 @@ import Link from "next/link";
 
 import { GapBar } from "@/components/gap.tsx";
 import { SearchTypeahead } from "@/components/search.tsx";
-import { db } from "@/db";
 import { count, EM_DASH, longDate } from "@/lib/format.ts";
-import {
-  getFeed,
-  getHeldBands,
-  getLandingCounts,
-  type FeedItem,
-} from "@/lib/queries/landing.ts";
+import { getFeed, getHeldBands, getLandingCounts } from "@/lib/queries/cached.ts";
+import type { FeedItem } from "@/lib/queries/landing.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -22,9 +17,9 @@ const KIND_LABEL: Record<FeedItem["kind"], { text: string; tone: string }> = {
 
 export default async function Landing() {
   const [counts, bands, feed] = await Promise.all([
-    getLandingCounts(db),
-    getHeldBands(db),
-    getFeed(db, 10),
+    getLandingCounts(),
+    getHeldBands(),
+    getFeed(10),
   ]);
 
   const scaleMax = Math.max(24, ...feed.map((f) => f.stat ?? 0));
@@ -80,6 +75,7 @@ export default async function Landing() {
                   <li key={`${f.kind}-${f.showId}-${f.headline}`}>
                     <Link
                       href={`/artist/${f.artistMbid}/show/${f.showId}`}
+                      prefetch={false}
                       className="block rounded-md border border-border bg-surface-100 p-5 hover:bg-surface-200"
                       style={{ borderLeft: `3px solid ${kind.tone}` }}
                     >
@@ -156,6 +152,7 @@ export default async function Landing() {
               <li key={b.mbid}>
                 <Link
                   href={`/artist/${b.mbid}`}
+                  prefetch={false}
                   className="block h-full rounded-md border border-border bg-surface-100 p-3 hover:bg-surface-200"
                 >
                   <span className="block truncate t-item-title text-text-primary">

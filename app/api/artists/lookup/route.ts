@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { artists } from "@/db/schema.ts";
 import { FIRST_PULL_PAGES, ingestArtist } from "@/lib/ingest/run.ts";
+import { invalidateData } from "@/lib/queries/cached.ts";
 import { httpStatusFor, IngestError } from "@/lib/setlistfm/errors.ts";
 
 // Reads the database and may trigger an outbound fetch; never cacheable.
@@ -87,5 +88,9 @@ export async function POST(request: Request) {
       );
     }
     throw err;
+  } finally {
+    // Also after a handled failure: a run can write some pages before it fails. See
+    // invalidateData() for the one case this does not cover.
+    invalidateData();
   }
 }

@@ -4,7 +4,6 @@ import { notFound } from "next/navigation";
 import { GapNumeral } from "@/components/gap.tsx";
 import { EmptyState, NoSetlists, ProvisionalChip } from "@/components/data-state.tsx";
 import { RowLegend, SetlistRow } from "@/components/setlist-row.tsx";
-import { db } from "@/db";
 import {
   count,
   dottedDate,
@@ -16,15 +15,15 @@ import {
   shortDate,
   weekday,
 } from "@/lib/format.ts";
-import { getArtistHeader } from "@/lib/queries/artist.ts";
 import {
   getAdjacentShows,
+  getArtistHeader,
   getRun,
   getSetlist,
   getShowGuests,
   getShowHeader,
   getShowStats,
-} from "@/lib/queries/show.ts";
+} from "@/lib/queries/cached.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -68,17 +67,17 @@ export default async function ShowPage(
   const { mbid, showId } = await props.params;
 
   const [show, artist] = await Promise.all([
-    getShowHeader(db, showId),
-    getArtistHeader(db, mbid),
+    getShowHeader(showId),
+    getArtistHeader(mbid),
   ]);
   if (!show || !artist || show.artistMbid !== mbid) notFound();
 
   const [stats, setlist, guests, run, adjacent] = await Promise.all([
-    getShowStats(db, showId),
-    getSetlist(db, showId),
-    getShowGuests(db, showId, show.artistId),
-    getRun(db, show.artistId, showId),
-    getAdjacentShows(db, show.artistId, show.eventDate),
+    getShowStats(showId),
+    getSetlist(showId),
+    getShowGuests(showId, show.artistId),
+    getRun(show.artistId, showId),
+    getAdjacentShows(show.artistId, show.eventDate),
   ]);
 
   // "First play in our file" only means "debut" once the whole history is in. Until then
@@ -328,6 +327,7 @@ export default async function ShowPage(
                   <li key={r.showId}>
                     <Link
                       href={`/artist/${mbid}/show/${r.showId}`}
+                      prefetch={false}
                       className={`flex items-baseline justify-between gap-3 rounded-md border px-3 py-2 ${
                         r.isCurrent
                           ? "border-gap/50 bg-surface-100"

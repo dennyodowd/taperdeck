@@ -1,5 +1,4 @@
-import { db } from "@/db";
-import { getPlayHistory } from "@/lib/queries/artist.ts";
+import { getPlayHistory } from "@/lib/queries/cached.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -13,5 +12,5 @@ export async function GET(
   if (!Number.isInteger(id)) {
     return Response.json({ ok: false, error: "BAD_REQUEST" }, { status: 400 });
   }
-  return Response.json({ ok: true, history: await getPlayHistory(db, id) });
+  return Response.json({ ok: true, history: await getPlayHistory(id) });
 }

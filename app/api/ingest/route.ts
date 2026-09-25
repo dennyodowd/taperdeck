@@ -8,6 +8,7 @@ import {
   requestsUsedToday,
   DAILY_REQUEST_BUDGET,
 } from "@/lib/ingest/run.ts";
+import { invalidateData } from "@/lib/queries/cached.ts";
 import { httpStatusFor, IngestError } from "@/lib/setlistfm/errors.ts";
 
 export const dynamic = "force-dynamic";
@@ -57,6 +58,10 @@ export async function POST(request: Request) {
       );
     }
     throw err;
+  } finally {
+    // Also after a handled failure: a run can write some pages before it fails. See
+    // invalidateData() for the one case this does not cover.
+    invalidateData();
   }
 }
 

@@ -1,5 +1,4 @@
-import { db } from "@/db";
-import { searchHeldBands } from "@/lib/queries/landing.ts";
+import { searchHeldBands } from "@/lib/queries/cached.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +8,8 @@ export const dynamic = "force-dynamic";
  * when the visitor asks for it.
  */
 export async function GET(request: Request) {
-  const q = new URL(request.url).searchParams.get("q") ?? "";
-  return Response.json({ ok: true, results: await searchHeldBands(db, q) });
+  // The query matches case-insensitively throughout, so folding case here changes no
+  // result and lets "Goose" and "goose" share one cache entry.
+  const q = (new URL(request.url).searchParams.get("q") ?? "").trim().toLowerCase();
+  return Response.json({ ok: true, results: await searchHeldBands(q) });
 }

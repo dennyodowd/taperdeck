@@ -10,7 +10,6 @@ import {
 } from "@/components/data-state.tsx";
 import { GapNumeral, ScaleNote } from "@/components/gap.tsx";
 import { SongTable } from "@/components/song-table.tsx";
-import { db } from "@/db";
 import { count, dateRange, EM_DASH, initials, longDate, plural } from "@/lib/format.ts";
 import {
   getArtistHeader,
@@ -19,22 +18,22 @@ import {
   getGuests,
   getRecentShows,
   getSongTable,
-} from "@/lib/queries/artist.ts";
+} from "@/lib/queries/cached.ts";
 
 export const dynamic = "force-dynamic";
 
 export default async function ArtistPage(props: PageProps<"/artist/[mbid]">) {
   const { mbid } = await props.params;
 
-  const artist = await getArtistHeader(db, mbid);
+  const artist = await getArtistHeader(mbid);
   if (!artist) notFound();
 
   const [stats, songs, recent, guests, guestSummary] = await Promise.all([
-    getArtistStats(db, artist.id),
-    getSongTable(db, artist.id),
-    getRecentShows(db, artist.id, 6),
-    getGuests(db, artist.id),
-    getGuestSummary(db, artist.id),
+    getArtistStats(artist.id),
+    getSongTable(artist.id),
+    getRecentShows(artist.id, 6),
+    getGuests(artist.id),
+    getGuestSummary(artist.id),
   ]);
 
   const coldest = songs[0] ?? null;
@@ -177,6 +176,7 @@ export default async function ArtistPage(props: PageProps<"/artist/[mbid]">) {
                 <li key={s.showId}>
                   <Link
                     href={`/artist/${mbid}/show/${s.showId}`}
+                    prefetch={false}
                     className="flex items-baseline justify-between gap-3 rounded-md border border-border px-3 py-2 hover:bg-surface-100"
                   >
                     <span className="min-w-0">
