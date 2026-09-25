@@ -524,9 +524,14 @@ live queries, with autoscaling allowed up to 8 CU. What now stands against that:
   appear within 24h, or immediately after any ingest through the API.
 - **List links use `prefetch={false}`** — the landing feed and band grid, recent shows,
   and "This run". One visit must cost one render, not one per link.
-- **`app/robots.txt`** keeps crawlers out of `/api/`.
+- **`app/robots.txt`** keeps crawlers out of `/api/` and SEO crawlers (Semrush, Ahrefs
+  and similar) out entirely. The cache cannot help against them: they visit each of
+  thousands of show pages once, so every request is a miss that wakes Neon. Verified bots
+  like these pass Bot Protection, so they need blocking by name.
 - **Outside the code** (set by hand, not visible in the repo): Vercel Bot Protection on
-  *challenge*, AI bots *denied*, and the `/api/ingest` + `/api/cron/` bypass rule above.
+  *challenge*, AI bots *denied*, a custom rule denying the same SEO crawlers by user
+  agent (for those that ignore `robots.txt`), and the `/api/ingest` + `/api/cron/`
+  bypass rule above.
   In Neon, scale-to-zero stays on and the
   autoscaling ceiling stays low — every burst scales to whatever the ceiling allows, and
   the dashboard, not this file, is the record of what it is.

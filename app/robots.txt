@@ -1,3 +1,15 @@
+# SEO crawlers walk every show page once, so the cache never helps and each visit
+# wakes the database. This is a demo; they give nothing back. Search engines stay allowed.
+User-Agent: SemrushBot
+User-Agent: AhrefsBot
+User-Agent: MJ12bot
+User-Agent: DotBot
+User-Agent: BLEXBot
+User-Agent: DataForSeoBot
+User-Agent: Barkrowler
+User-Agent: serpstatbot
+Disallow: /
+
 User-Agent: *
 Allow: /
 Disallow: /api/
