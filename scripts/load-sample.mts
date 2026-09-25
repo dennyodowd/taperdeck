@@ -11,6 +11,10 @@
  * copies, it would stop proving anything about production.
  *
  * Re-running must be a no-op. That is one of the assertions.
+ *
+ * It runs against PRODUCTION — there is no dev branch — so it removes the fixture artist
+ * when it finishes, pass or fail. Left behind, the fixture showed on the public landing
+ * page as a second Phish, duplicated the feed and inflated the headline counts.
  */
 
 import { readFileSync } from "node:fs";
@@ -253,14 +257,6 @@ async function verify(artistId: number) {
 
 // --------------------------------------------------------------------------
 
-const first = await load();
-console.log(
-  `loaded: ${first.showCount} shows, ${first.perfCount} performances, artist_id=${first.artistId}`,
-);
-
-await verify(first.artistId);
-
-console.log("\n--- idempotency: second load must change nothing ---");
 // Scoped to the fixture artist, not global: other artists are being ingested live, so a
 // global count would drift for reasons that have nothing to do with idempotency.
 const countsFor = (id: number) => sql`
@@ -270,10 +266,31 @@ const countsFor = (id: number) => sql`
 `;
 
 type Counts = { shows: number; perfs: number; songs: number };
-const before = await one<Counts>(countsFor(first.artistId));
-await load();
-const afterSecond = await one<Counts>(countsFor(first.artistId));
-check("re-running the loader is a no-op", afterSecond, before);
+
+try {
+  const first = await load();
+  console.log(
+    `loaded: ${first.showCount} shows, ${first.perfCount} performances, artist_id=${first.artistId}`,
+  );
+
+  await verify(first.artistId);
+
+  console.log("\n--- idempotency: second load must change nothing ---");
+  const before = await one<Counts>(countsFor(first.artistId));
+  await load();
+  const afterSecond = await one<Counts>(countsFor(first.artistId));
+  check("re-running the loader is a no-op", afterSecond, before);
+} finally {
+  // Deleting the artist cascades to its shows, songs and performances. Venues are shared
+  // with real Phish and stay.
+  console.log("\n--- cleanup: fixture removed from the database ---");
+  await db.execute(sql`DELETE FROM artists WHERE mbid = ${FIXTURE_MBID}`);
+  const left = await one<{ artists: number; shows: number }>(sql`
+    SELECT (SELECT count(*)::int FROM artists WHERE mbid = ${FIXTURE_MBID}) AS artists,
+           (SELECT count(*)::int FROM shows WHERE id LIKE ${FIXTURE_ID_PREFIX + "%"}) AS shows
+  `);
+  check("fixture artist and its shows are gone", [left?.artists, left?.shows], [0, 0]);
+}
 
 console.log(failures === 0 ? "\nAll assertions passed." : `\n${failures} assertion(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);
